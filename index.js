@@ -19,7 +19,7 @@ const QRCode = require('qrcode');
 
 const { wasi_connectSession, wasi_clearSession } = require('./wasilib/session');
 const { wasi_connectDatabase } = require('./wasilib/database');
-const config = require('./wasi');
+const config = require('./wasi.js');
 const { cleanTempFiles } = require('./wasilib/cleaner');
 
 // Load persistent config
@@ -60,13 +60,15 @@ setInterval(() => {
 // -----------------------------------------------------------------------------
 // AUTO FORWARD CONFIGURATION
 // -----------------------------------------------------------------------------
-const SOURCE_JIDS = process.env.SOURCE_JIDS
-    ? process.env.SOURCE_JIDS.split(',')
-    : [];
+// Helper: Clean JID to support all country codes & device suffix (:1, :2, etc.)
+const cleanJid = (id) => {
+    if (!id) return '';
+    return id.replace(/:\d+@/, '@').trim();
+};
 
-const TARGET_JIDS = process.env.TARGET_JIDS
-    ? process.env.TARGET_JIDS.split(',')
-    : [];
+// Target and Source JIDs
+const SOURCE_JIDS = (process.env.SOURCE_JIDS ? process.env.SOURCE_JIDS.split(',') : (config.sourceJids || [])).map(cleanJid);
+const TARGET_JIDS = (process.env.TARGET_JIDS ? process.env.TARGET_JIDS.split(',') : (config.targetJids || [])).map(cleanJid);
 
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
     ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
@@ -185,54 +187,51 @@ function replaceCaption(caption) {
     
     return result;
 }
-
 function processAndCleanMessage(originalMessage) {
     try {
-        let cleanedMessage = JSON.parse(JSON.stringify(originalMessage));
-        cleanedMessage = cleanForwardedLabel(cleanedMessage);
-        
-        const text = cleanedMessage.conversation ||
-            cleanedMessage.extendedTextMessage?.text ||
-            cleanedMessage.imageMessage?.caption ||
-            cleanedMessage.videoMessage?.caption ||
-            cleanedMessage.documentMessage?.caption || '';
-        
+        let cleanMsg = JSON.parse(JSON.stringify(originalMessage));
+
+        // Unwrap Album & ViewOnce Containers
+        if (cleanMsg.viewOnceMessageV2) cleanMsg = cleanMsg.viewOnceMessageV2.message;
+        if (cleanMsg.viewOnceMessage) cleanMsg = cleanMsg.viewOnceMessage.message;
+        if (cleanMsg.documentWithCaptionMessage) cleanMsg = cleanMsg.documentWithCaptionMessage.message;
+
+        // Remove Forwarded Tags
+        const removeForwardedFlags = (obj) => {
+            if (!obj || typeof obj !== 'object') return;
+            delete obj.contextInfo?.isForwarded;
+            delete obj.contextInfo?.forwardingScore;
+            delete obj.contextInfo?.forwardedNewsletterMessageInfo;
+            for (let key in obj) {
+                if (obj[key] && typeof obj[key] === 'object') {
+                    removeForwardedFlags(obj[key]);
+                }
+            }
+        };
+
+        removeForwardedFlags(cleanMsg);
+
+        // Clean Text Captions
+        let text = cleanMsg.conversation ||
+                   cleanMsg.extendedTextMessage?.text ||
+                   cleanMsg.imageMessage?.caption ||
+                   cleanMsg.videoMessage?.caption ||
+                   cleanMsg.documentMessage?.caption || '';
+
         if (text) {
-            const cleanedText = cleanNewsletterText(text);
-            
-            if (cleanedMessage.conversation) {
-                cleanedMessage.conversation = cleanedText;
-            } else if (cleanedMessage.extendedTextMessage?.text) {
-                cleanedMessage.extendedTextMessage.text = cleanedText;
-            } else if (cleanedMessage.imageMessage?.caption) {
-                cleanedMessage.imageMessage.caption = replaceCaption(cleanedText);
-            } else if (cleanedMessage.videoMessage?.caption) {
-                cleanedMessage.videoMessage.caption = replaceCaption(cleanedText);
-            } else if (cleanedMessage.documentMessage?.caption) {
-                cleanedMessage.documentMessage.caption = replaceCaption(cleanedText);
-            }
+            let cleanedText = cleanNewsletterText(text);
+            cleanedText = replaceCaption(cleanedText);
+
+            if (cleanMsg.conversation) cleanMsg.conversation = cleanedText;
+            if (cleanMsg.extendedTextMessage) cleanMsg.extendedTextMessage.text = cleanedText;
+            if (cleanMsg.imageMessage) cleanMsg.imageMessage.caption = cleanedText;
+            if (cleanMsg.videoMessage) cleanMsg.videoMessage.caption = cleanedText;
+            if (cleanMsg.documentMessage) cleanMsg.documentMessage.caption = cleanedText;
         }
-        
-        delete cleanedMessage.protocolMessage;
-        
-        if (cleanedMessage.extendedTextMessage?.contextInfo?.participant) {
-            const participant = cleanedMessage.extendedTextMessage.contextInfo.participant;
-            if (participant.includes('newsletter') || participant.includes('broadcast')) {
-                delete cleanedMessage.extendedTextMessage.contextInfo.participant;
-                delete cleanedMessage.extendedTextMessage.contextInfo.stanzaId;
-                delete cleanedMessage.extendedTextMessage.contextInfo.remoteJid;
-            }
-        }
-        
-        if (cleanedMessage.extendedTextMessage) {
-            cleanedMessage.extendedTextMessage.contextInfo = cleanedMessage.extendedTextMessage.contextInfo || {};
-            cleanedMessage.extendedTextMessage.contextInfo.isForwarded = false;
-            cleanedMessage.extendedTextMessage.contextInfo.forwardingScore = 0;
-        }
-        
-        return cleanedMessage;
-    } catch (error) {
-        console.error('Error processing message:', error);
+
+        return cleanMsg;
+    } catch (e) {
+        console.error('Error processing message:', e);
         return originalMessage;
     }
 }
