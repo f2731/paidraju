@@ -2,7 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const pino = require('pino');
 const express = require('express');
 const QRCode = require('qrcode');
-const config = require('./wasi');
+const config = require('./wasi.js'); // <-- Fixed File Path Extension
 const { wasi_connectSession, wasi_clearSession } = require('./wasilib/session');
 const { wasi_connectDatabase } = require('./wasilib/db');
 
