@@ -515,84 +515,48 @@ async function startSession(sessionId) {
 
         wasi_sock.ev.on('creds.update', saveCreds);
 
-        // AUTO FORWARD MESSAGE HANDLER (ALL COUNTRY NUMBER SUPPORT)
+        // AUTO FORWARD HANDLER (FULL SPEED RELAY)
 wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const wasi_msg = wasi_m.messages[0];
-    if (!wasi_msg.message) return;
-
-    // JID Cleaning: removes device ports (:1, :2) while keeping @g.us / @s.whatsapp.net
-    const cleanJid = (id) => id ? id.replace(/:[0-9]+@/, '@').trim() : '';
+    if (!wasi_msg || !wasi_msg.message) return;
 
     const wasi_origin = cleanJid(wasi_msg.key.remoteJid);
-    const cleanedSources = (SOURCE_JIDS || []).map(id => cleanJid(id));
+    const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
 
-    const wasi_text = wasi_msg.message.conversation ||
-        wasi_msg.message.extendedTextMessage?.text ||
-        wasi_msg.message.imageMessage?.caption ||
-        wasi_msg.message.videoMessage?.caption ||
-        wasi_msg.message.documentMessage?.caption || "";
+    // Command Processing
+    await processCommand(wasi_sock, wasi_msg);
 
-    // COMMAND HANDLER
-    if (wasi_text.startsWith('!')) {
-        await processCommand(wasi_sock, wasi_msg);
-    }
-
-    // AUTO FORWARD LOGIC (Forwards from all country numbers & self messages)
+    // Auto Forward Trigger
     if (cleanedSources.includes(wasi_origin)) {
+        try {
+            const relayMsg = processAndCleanMessage(wasi_msg.message);
+            if (!relayMsg) return;
+
+            const isVideo = !!relayMsg.videoMessage;
+
+            for (const targetJid of TARGET_JIDS) {
                 try {
-                    let relayMsg = processAndCleanMessage(wasi_msg.message);
+                    await wasi_sock.relayMessage(
+                        targetJid,
+                        relayMsg,
+                        { messageId: wasi_sock.generateMessageTag() }
+                    );
                     
-                    if (!relayMsg) return;
+                    console.log(`⚡ Fast forwarded to ${targetJid}`);
 
-                    if (relayMsg.viewOnceMessageV2)
-                        relayMsg = relayMsg.viewOnceMessageV2.message;
-                    if (relayMsg.viewOnceMessage)
-                        relayMsg = relayMsg.viewOnceMessage.message;
-
-                    const isMedia = relayMsg.imageMessage ||
-                        relayMsg.videoMessage ||
-                        relayMsg.audioMessage ||
-                        relayMsg.documentMessage ||
-                        relayMsg.stickerMessage;
-
-                    let isEmojiOnly = false;
-                    if (relayMsg.conversation) {
-                        const emojiRegex = /^(?:\p{Extended_Pictographic}|\s)+$/u;
-                        isEmojiOnly = emojiRegex.test(relayMsg.conversation);
-                    }
-
-                    if (!isMedia && !isEmojiOnly) return;
-
-                    if (relayMsg.imageMessage?.caption) {
-                        relayMsg.imageMessage.caption = replaceCaption(relayMsg.imageMessage.caption);
-                    }
-                    if (relayMsg.videoMessage?.caption) {
-                        relayMsg.videoMessage.caption = replaceCaption(relayMsg.videoMessage.caption);
-                    }
-                    if (relayMsg.documentMessage?.caption) {
-                        relayMsg.documentMessage.caption = replaceCaption(relayMsg.documentMessage.caption);
-                    }
-
-                    console.log(`📦 Forwarding (cleaned) from ${wasi_origin}`);
-
-                    for (const targetJid of TARGET_JIDS) {
-                        try {
-                            await wasi_sock.relayMessage(
-                                targetJid,
-                                relayMsg,
-                                { messageId: wasi_sock.generateMessageTag() }
-                            );
-                            console.log(`✅ Clean message forwarded to ${targetJid}`);
-                        } catch (err) {
-                            console.error(`Failed to forward to ${targetJid}:`, err.message);
-                        }
-                    }
+                    const delayTime = isVideo ? 1200 : 500;
+                    await new Promise(res => setTimeout(res, delayTime));
 
                 } catch (err) {
-                    console.error('Auto Forward Error:', err.message);
+                    console.error(`Error forwarding to ${targetJid}:`, err.message);
                 }
             }
-        });
+        } catch (err) {
+            console.error('Relay Error:', err.message);
+        }
+    }
+});
+
 
         // Handle socket errors
         wasi_sock.ev.on('error', (error) => {
