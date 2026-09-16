@@ -517,83 +517,99 @@ async function startSession(sessionId) {
         wasi_sock.ev.on('creds.update', saveCreds);
 
         // AUTO FORWARD MESSAGE HANDLER (ALL COUNTRY NUMBER SUPPORT)
+// AUTO FORWARD HANDLER (100+ BULK ALBUM & HEAVY MEDIA SUPPORT)
 wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const wasi_msg = wasi_m.messages[0];
-    if (!wasi_msg.message) return;
+    if (!wasi_msg || !wasi_msg.message) return;
 
-    // JID Cleaning: removes device ports (:1, :2) while keeping @g.us / @s.whatsapp.net
-    const cleanJid = (id) => id ? id.replace(/:[0-9]+@/, '@').trim() : '';
+    // Heroku Config Settings (Toggle Options)
+    const ALLOW_TEXT = process.env.ALLOW_TEXT !== 'false';
+    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'false';
+    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'false';
+    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'false';
+    const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';
+    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'true';
 
+    const cleanJid = (id) => id ? id.replace(/:(?:[0-9]+)@/, '@').trim() : '';
     const wasi_origin = cleanJid(wasi_msg.key.remoteJid);
-    const cleanedSources = (SOURCE_JIDS || []).map(id => cleanJid(id));
+    const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
 
-    const wasi_text = wasi_msg.message.conversation ||
-        wasi_msg.message.extendedTextMessage?.text ||
-        wasi_msg.message.imageMessage?.caption ||
-        wasi_msg.message.videoMessage?.caption ||
-        wasi_msg.message.documentMessage?.caption || "";
+    // Command Processing (!ping etc.)
+    await processCommand(wasi_sock, wasi_msg);
 
-    // COMMAND HANDLER
-    if (wasi_text.startsWith('!')) {
-        await processCommand(wasi_sock, wasi_msg);
-    }
-
-    // AUTO FORWARD LOGIC (Forwards from all country numbers & self messages)
+    // Auto Forward Trigger
     if (cleanedSources.includes(wasi_origin)) {
-                try {
-                    let relayMsg = processAndCleanMessage(wasi_msg.message);
-                    
-                    if (!relayMsg) return;
+        try {
+            let baseMsg = wasi_msg.message;
 
-                    if (relayMsg.viewOnceMessageV2)
-                        relayMsg = relayMsg.viewOnceMessageV2.message;
-                    if (relayMsg.viewOnceMessage)
-                        relayMsg = relayMsg.viewOnceMessage.message;
+            // Unwrap ViewOnce Messages
+            if (baseMsg?.viewOnceMessageV2?.message) baseMsg = baseMsg.viewOnceMessageV2.message;
+            if (baseMsg?.viewOnceMessage?.message) baseMsg = baseMsg.viewOnceMessage.message;
 
-                    const isMedia = relayMsg.imageMessage ||
-                        relayMsg.videoMessage ||
-                        relayMsg.audioMessage ||
-                        relayMsg.documentMessage ||
-                        relayMsg.stickerMessage;
+            // Extract All Messages From Heavy/Large Album Arrays
+            let rawMessages = [];
+            if (baseMsg?.albumMessage?.messages && Array.isArray(baseMsg.albumMessage.messages)) {
+                rawMessages = baseMsg.albumMessage.messages;
+            } else if (baseMsg?.messageContextInfo?.albumMessage?.messages && Array.isArray(baseMsg.messageContextInfo.albumMessage.messages)) {
+                rawMessages = baseMsg.messageContextInfo.albumMessage.messages;
+            } else {
+                rawMessages.push(wasi_msg.message);
+            }
 
-                    let isEmojiOnly = false;
-                    if (relayMsg.conversation) {
-                        const emojiRegex = /^(?:\p{Extended_Pictographic}|\s)+$/u;
-                        isEmojiOnly = emojiRegex.test(relayMsg.conversation);
+            console.log(`📦 Processing ${rawMessages.length} item(s) from ${wasi_origin}`);
+
+            // Loop Through Every Single Item in Album (Unlimited Limit)
+            for (let i = 0; i < rawMessages.length; i++) {
+                const item = rawMessages[i];
+                let currentMsg = item.message || item;
+
+                // Media Filters Check
+                const isText = !!(currentMsg.conversation || currentMsg.extendedTextMessage);
+                const isImage = !!currentMsg.imageMessage;
+                const isVideo = !!currentMsg.videoMessage;
+                const isDocument = !!currentMsg.documentMessage;
+                const isAudio = !!(currentMsg.audioMessage || currentMsg.voiceMessage);
+                const isSticker = !!currentMsg.stickerMessage;
+
+                if (isText && !ALLOW_TEXT) continue;
+                if (isImage && !ALLOW_IMAGES) continue;
+                if (isVideo && !ALLOW_VIDEOS) continue;
+                if (isDocument && !ALLOW_DOCUMENTS) continue;
+                if (isAudio && !ALLOW_AUDIO) continue;
+                if (isSticker && !ALLOW_STICKERS) continue;
+
+                // Process Clean Message & Remove Caption Links if configured
+                let cleanPayload = typeof processAndCleanMessage === 'function' 
+                    ? processAndCleanMessage(currentMsg) 
+                    : currentMsg;
+
+                if (!cleanPayload) cleanPayload = currentMsg;
+
+                // Relay To All Targets
+                for (const targetJid of TARGET_JIDS) {
+                    try {
+                        await wasi_sock.relayMessage(
+                            targetJid,
+                            cleanPayload,
+                            { messageId: wasi_sock.generateMessageTag() }
+                        );
+
+                        console.log(`⚡ Forwarded Item [${i + 1}/${rawMessages.length}] to ${targetJid}`);
+
+                        // Essential Delay For 100+ Videos to Prevent Rate-Limit/Crash
+                        const delayTime = isVideo ? 1500 : 500;
+                        await new Promise(res => setTimeout(res, delayTime));
+
+                    } catch (err) {
+                        console.error(`Error forwarding item ${i + 1} to ${targetJid}:`, err.message);
                     }
-
-                    if (!isMedia && !isEmojiOnly) return;
-
-                    if (relayMsg.imageMessage?.caption) {
-                        relayMsg.imageMessage.caption = replaceCaption(relayMsg.imageMessage.caption);
-                    }
-                    if (relayMsg.videoMessage?.caption) {
-                        relayMsg.videoMessage.caption = replaceCaption(relayMsg.videoMessage.caption);
-                    }
-                    if (relayMsg.documentMessage?.caption) {
-                        relayMsg.documentMessage.caption = replaceCaption(relayMsg.documentMessage.caption);
-                    }
-
-                    console.log(`📦 Forwarding (cleaned) from ${wasi_origin}`);
-
-                    for (const targetJid of TARGET_JIDS) {
-                        try {
-                            await wasi_sock.relayMessage(
-                                targetJid,
-                                relayMsg,
-                                { messageId: wasi_sock.generateMessageTag() }
-                            );
-                            console.log(`✅ Clean message forwarded to ${targetJid}`);
-                        } catch (err) {
-                            console.error(`Failed to forward to ${targetJid}:`, err.message);
-                        }
-                    }
-
-                } catch (err) {
-                    console.error('Auto Forward Error:', err.message);
                 }
             }
-        });
+        } catch (err) {
+            console.error('Relay Heavy Album Error:', err.message);
+        }
+    }
+});
 
         // Handle socket errors
         wasi_sock.ev.on('error', (error) => {
