@@ -517,7 +517,7 @@ async function startSession(sessionId) {
         wasi_sock.ev.on('creds.update', saveCreds);
 
         // AUTO FORWARD MESSAGE HANDLER (ALL COUNTRY NUMBER SUPPORT)
-// AUTO FORWARD HANDLER (FULL ALBUM & BULK MEDIA SUPPORT)
+// AUTO FORWARD HANDLER (100% ZERO-MISSING ALBUM & BULK MEDIA SUPPORT)
 wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const wasi_msg = wasi_m.messages[0];
     if (!wasi_msg || !wasi_msg.message) return;
@@ -539,38 +539,38 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
     // Auto Forward Trigger
     if (cleanedSources.includes(wasi_origin)) {
         try {
-            let msgContent = wasi_msg.message;
+            let baseMsg = wasi_msg.message;
 
-            // 1. Unwrap ViewOnce Media
-            if (msgContent?.viewOnceMessageV2?.message) msgContent = msgContent.viewOnceMessageV2.message;
-            if (msgContent?.viewOnceMessage?.message) msgContent = msgContent.viewOnceMessage.message;
+            // Unwrap ViewOnce
+            if (baseMsg?.viewOnceMessageV2?.message) baseMsg = baseMsg.viewOnceMessageV2.message;
+            if (baseMsg?.viewOnceMessage?.message) baseMsg = baseMsg.viewOnceMessage.message;
 
-            // 2. ALBUM HANDLING (Multi-Video / Image Group Support)
-            let messagesToForward = [];
+            // Extract All Messages From Album Array
+            let rawMessages = [];
             
-            if (msgContent?.albumMessage || msgContent?.groupMentionedMessage?.message?.albumMessage) {
-                const album = msgContent.albumMessage || msgContent.groupMentionedMessage.message.albumMessage;
-                if (album?.expectedImageNumber || album?.messages) {
-                    messagesToForward = album.messages || [];
-                }
+            if (baseMsg?.albumMessage?.messages && Array.isArray(baseMsg.albumMessage.messages)) {
+                rawMessages = baseMsg.albumMessage.messages;
+            } else if (baseMsg?.messageContextInfo?.albumMessage?.messages && Array.isArray(baseMsg.messageContextInfo.albumMessage.messages)) {
+                rawMessages = baseMsg.messageContextInfo.albumMessage.messages;
             } else {
-                messagesToForward.push(msgContent);
+                rawMessages.push(wasi_msg.message);
             }
 
-            // 3. Process Each Item (Single or Album Items)
-            for (const singleMsg of messagesToForward) {
-                const relayMsg = processAndCleanMessage(singleMsg);
-                if (!relayMsg) continue;
+            console.log(`📦 Processing ${rawMessages.length} item(s) from ${wasi_origin}`);
 
-                // Media Type Checks
-                const isText = !!(relayMsg.conversation || relayMsg.extendedTextMessage);
-                const isImage = !!relayMsg.imageMessage;
-                const isVideo = !!relayMsg.videoMessage;
-                const isDocument = !!relayMsg.documentMessage;
-                const isAudio = !!(relayMsg.audioMessage || relayMsg.voiceMessage);
-                const isSticker = !!relayMsg.stickerMessage;
+            // Process Every Single Item In Array (No Video Left Behind)
+            for (let i = 0; i < rawMessages.length; i++) {
+                const item = rawMessages[i];
+                let currentMsg = item.message || item;
 
-                // Apply Filters
+                // Media Filters Check
+                const isText = !!(currentMsg.conversation || currentMsg.extendedTextMessage);
+                const isImage = !!currentMsg.imageMessage;
+                const isVideo = !!currentMsg.videoMessage;
+                const isDocument = !!currentMsg.documentMessage;
+                const isAudio = !!(currentMsg.audioMessage || currentMsg.voiceMessage);
+                const isSticker = !!currentMsg.stickerMessage;
+
                 if (isText && !ALLOW_TEXT) continue;
                 if (isImage && !ALLOW_IMAGES) continue;
                 if (isVideo && !ALLOW_VIDEOS) continue;
@@ -578,31 +578,39 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
                 if (isAudio && !ALLOW_AUDIO) continue;
                 if (isSticker && !ALLOW_STICKERS) continue;
 
+                // Process Clean Message
+                let cleanPayload = typeof processAndCleanMessage === 'function' 
+                    ? processAndCleanMessage(currentMsg) 
+                    : currentMsg;
+
+                if (!cleanPayload) cleanPayload = currentMsg;
+
                 // Relay To All Targets
                 for (const targetJid of TARGET_JIDS) {
                     try {
                         await wasi_sock.relayMessage(
                             targetJid,
-                            relayMsg,
+                            cleanPayload,
                             { messageId: wasi_sock.generateMessageTag() }
                         );
                         
-                        console.log(`⚡ Forwarded (Item) to ${targetJid}`);
+                        console.log(`⚡ Forwarded Item [${i + 1}/${rawMessages.length}] to ${targetJid}`);
 
-                        // Heavy Video Album Queue Delay (Rate Limit Fix)
-                        const delayTime = isVideo ? 1500 : 600;
+                        // Essential Delay For Multi-Video Albums
+                        const delayTime = isVideo ? 1200 : 500;
                         await new Promise(res => setTimeout(res, delayTime));
 
                     } catch (err) {
-                        console.error(`Error forwarding item to ${targetJid}:`, err.message);
+                        console.error(`Error forwarding item ${i + 1} to ${targetJid}:`, err.message);
                     }
                 }
             }
         } catch (err) {
-            console.error('Relay Album Error:', err.message);
+            console.error('Relay Heavy Album Error:', err.message);
         }
     }
-});  
+});
+
         
         // Handle socket errors
         wasi_sock.ev.on('error', (error) => {
