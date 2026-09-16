@@ -515,10 +515,21 @@ async function startSession(sessionId) {
 
         wasi_sock.ev.on('creds.update', saveCreds);
 
-        // AUTO FORWARD HANDLER (FULL SPEED RELAY)
+        // AUTO FORWARD HANDLER WITH HEROKU CONFIG VARS TOGGLES
 wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const wasi_msg = wasi_m.messages[0];
     if (!wasi_msg || !wasi_msg.message) return;
+
+    // ==========================================
+    // ⚙️ HEROKU ENVIRONMENT SETTINGS
+    // ==========================================
+    const ALLOW_TEXT = process.env.ALLOW_TEXT !== 'false';           // Default: true
+    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'false';       // Default: true
+    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'false';       // Default: true
+    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'false'; // Default: true
+    const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';         // Default: true
+    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'true';    // Default: false
+    // ==========================================
 
     const wasi_origin = cleanJid(wasi_msg.key.remoteJid);
     const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
@@ -532,7 +543,21 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
             const relayMsg = processAndCleanMessage(wasi_msg.message);
             if (!relayMsg) return;
 
+            // 🔍 MEDIA TYPE CHECKING
+            const isText = !!(relayMsg.conversation || relayMsg.extendedTextMessage);
+            const isImage = !!relayMsg.imageMessage;
             const isVideo = !!relayMsg.videoMessage;
+            const isDocument = !!relayMsg.documentMessage;
+            const isAudio = !!(relayMsg.audioMessage || relayMsg.voiceMessage);
+            const isSticker = !!relayMsg.stickerMessage;
+
+            // 🛑 FILTER APPLYING
+            if (isText && !ALLOW_TEXT) return;
+            if (isImage && !ALLOW_IMAGES) return;
+            if (isVideo && !ALLOW_VIDEOS) return;
+            if (isDocument && !ALLOW_DOCUMENTS) return;
+            if (isAudio && !ALLOW_AUDIO) return;
+            if (isSticker && !ALLOW_STICKERS) return;
 
             for (const targetJid of TARGET_JIDS) {
                 try {
@@ -542,7 +567,7 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
                         { messageId: wasi_sock.generateMessageTag() }
                     );
                     
-                    console.log(`⚡ Fast forwarded to ${targetJid}`);
+                    console.log(`⚡ Forwarded (Filtered) to ${targetJid}`);
 
                     const delayTime = isVideo ? 1200 : 500;
                     await new Promise(res => setTimeout(res, delayTime));
@@ -556,7 +581,6 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
         }
     }
 });
-
 
         // Handle socket errors
         wasi_sock.ev.on('error', (error) => {
