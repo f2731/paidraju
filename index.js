@@ -517,21 +517,18 @@ async function startSession(sessionId) {
         wasi_sock.ev.on('creds.update', saveCreds);
 
         // AUTO FORWARD MESSAGE HANDLER (ALL COUNTRY NUMBER SUPPORT)
-// AUTO FORWARD HANDLER WITH HEROKU CONFIG VARS TOGGLES
+// AUTO FORWARD HANDLER (FULL ALBUM & BULK MEDIA SUPPORT)
 wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const wasi_msg = wasi_m.messages[0];
     if (!wasi_msg || !wasi_msg.message) return;
 
-    // ==========================================
-    // ⚙️ HEROKU ENVIRONMENT SETTINGS
-    // ==========================================
-    const ALLOW_TEXT = process.env.ALLOW_TEXT !== 'false';           // Default: true
-    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'true';       // Default: true
-    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'true';       // Default: true
-    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'true'; // Default: true
-    const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';         // Default: true
-    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'false';    // Default: false
-    // ==========================================
+    // Heroku Config Settings
+    const ALLOW_TEXT = process.env.ALLOW_TEXT !== 'false';
+    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'false';
+    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'false';
+    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'false';
+    const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';
+    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'true';
 
     const wasi_origin = cleanJid(wasi_msg.key.remoteJid);
     const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
@@ -542,47 +539,70 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
     // Auto Forward Trigger
     if (cleanedSources.includes(wasi_origin)) {
         try {
-            const relayMsg = processAndCleanMessage(wasi_msg.message);
-            if (!relayMsg) return;
+            let msgContent = wasi_msg.message;
 
-            // 🔍 MEDIA TYPE CHECKING
-            const isText = !!(relayMsg.conversation || relayMsg.extendedTextMessage);
-            const isImage = !!relayMsg.imageMessage;
-            const isVideo = !!relayMsg.videoMessage;
-            const isDocument = !!relayMsg.documentMessage;
-            const isAudio = !!(relayMsg.audioMessage || relayMsg.voiceMessage);
-            const isSticker = !!relayMsg.stickerMessage;
+            // 1. Unwrap ViewOnce Media
+            if (msgContent?.viewOnceMessageV2?.message) msgContent = msgContent.viewOnceMessageV2.message;
+            if (msgContent?.viewOnceMessage?.message) msgContent = msgContent.viewOnceMessage.message;
 
-            // 🛑 FILTER APPLYING
-            if (isText && !ALLOW_TEXT) return;
-            if (isImage && !ALLOW_IMAGES) return;
-            if (isVideo && !ALLOW_VIDEOS) return;
-            if (isDocument && !ALLOW_DOCUMENTS) return;
-            if (isAudio && !ALLOW_AUDIO) return;
-            if (isSticker && !ALLOW_STICKERS) return;
+            // 2. ALBUM HANDLING (Multi-Video / Image Group Support)
+            let messagesToForward = [];
+            
+            if (msgContent?.albumMessage || msgContent?.groupMentionedMessage?.message?.albumMessage) {
+                const album = msgContent.albumMessage || msgContent.groupMentionedMessage.message.albumMessage;
+                if (album?.expectedImageNumber || album?.messages) {
+                    messagesToForward = album.messages || [];
+                }
+            } else {
+                messagesToForward.push(msgContent);
+            }
 
-            for (const targetJid of TARGET_JIDS) {
-                try {
-                    await wasi_sock.relayMessage(
-                        targetJid,
-                        relayMsg,
-                        { messageId: wasi_sock.generateMessageTag() }
-                    );
-                    
-                    console.log(`⚡ Forwarded (Filtered) to ${targetJid}`);
+            // 3. Process Each Item (Single or Album Items)
+            for (const singleMsg of messagesToForward) {
+                const relayMsg = processAndCleanMessage(singleMsg);
+                if (!relayMsg) continue;
 
-                    const delayTime = isVideo ? 1200 : 500;
-                    await new Promise(res => setTimeout(res, delayTime));
+                // Media Type Checks
+                const isText = !!(relayMsg.conversation || relayMsg.extendedTextMessage);
+                const isImage = !!relayMsg.imageMessage;
+                const isVideo = !!relayMsg.videoMessage;
+                const isDocument = !!relayMsg.documentMessage;
+                const isAudio = !!(relayMsg.audioMessage || relayMsg.voiceMessage);
+                const isSticker = !!relayMsg.stickerMessage;
 
-                } catch (err) {
-                    console.error(`Error forwarding to ${targetJid}:`, err.message);
+                // Apply Filters
+                if (isText && !ALLOW_TEXT) continue;
+                if (isImage && !ALLOW_IMAGES) continue;
+                if (isVideo && !ALLOW_VIDEOS) continue;
+                if (isDocument && !ALLOW_DOCUMENTS) continue;
+                if (isAudio && !ALLOW_AUDIO) continue;
+                if (isSticker && !ALLOW_STICKERS) continue;
+
+                // Relay To All Targets
+                for (const targetJid of TARGET_JIDS) {
+                    try {
+                        await wasi_sock.relayMessage(
+                            targetJid,
+                            relayMsg,
+                            { messageId: wasi_sock.generateMessageTag() }
+                        );
+                        
+                        console.log(`⚡ Forwarded (Item) to ${targetJid}`);
+
+                        // Heavy Video Album Queue Delay (Rate Limit Fix)
+                        const delayTime = isVideo ? 1500 : 600;
+                        await new Promise(res => setTimeout(res, delayTime));
+
+                    } catch (err) {
+                        console.error(`Error forwarding item to ${targetJid}:`, err.message);
+                    }
                 }
             }
         } catch (err) {
-            console.error('Relay Error:', err.message);
+            console.error('Relay Album Error:', err.message);
         }
     }
-});
+});  
         
         // Handle socket errors
         wasi_sock.ev.on('error', (error) => {
