@@ -538,11 +538,11 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
 
     // Heroku Config Settings (Toggle Options)
     const ALLOW_TEXT = process.env.ALLOW_TEXT !== 'false';
-    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'false';
-    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'false';
-    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'false';
+    const ALLOW_IMAGES = process.env.ALLOW_IMAGES !== 'true';
+    const ALLOW_VIDEOS = process.env.ALLOW_VIDEOS !== 'true';
+    const ALLOW_DOCUMENTS = process.env.ALLOW_DOCUMENTS !== 'true';
     const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';
-    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'true';
+    const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'false';
 
     // Universal Clean JID Function for All World Country Codes
 const cleanJid = (id) => {
