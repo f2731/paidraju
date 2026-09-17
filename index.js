@@ -67,8 +67,9 @@ const SOURCE_JIDS = process.env.SOURCE_JIDS
 const TARGET_JIDS = process.env.TARGET_JIDS
     ? process.env.TARGET_JIDS.split(',')
     : [];
-// Admin number for startup notifications
-const ADMIN_NUMBER = '923071782626'; // 👈 یہاں اپنا واٹس ایپ نمبر (بغیر + کے) لکھیں
+
+// Admin number for startup notifications and !Join command
+const ADMIN_NUMBER = '923071782626';
 const ADMIN_JID = `${ADMIN_NUMBER}@s.whatsapp.net`;
 
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
@@ -502,25 +503,22 @@ async function startSession(sessionId) {
                 }
                 
                 console.log(`✅ ${sessionId}: Connected to WhatsApp`);
-                        console.log(`✅ ${sessionId}: Connected to WhatsApp`);
-
-        // Send Startup Notification to Admin
-        const timeString = new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' });
-        const startupMessage = `🤖 *Bot Started Successfully*\n\n📱 *Session:* ${sessionId}\n⏰ *Time:* ${timeString}\n\n✅ WhatsApp connection is active.`;
-
-        try {
-            await wasi_sock.sendMessage(ADMIN_JID, { text: startupMessage });
-            console.log('✅ Startup notification sent to Admin successfully.');
-        } catch (err) {
-            console.error('❌ Failed to send startup notification:', err.message);
+        // Send startup notification to the configured admin.
+        if (!sessionState.startupNotified) {
+            try {
+                await wasi_sock.sendMessage(ADMIN_JID, {
+                    text: `🤖 *Bot Started Successfully*\n\n📱 *Session:* ${sessionId}\n⏰ *Time:* ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
+                });
+                sessionState.startupNotified = true;
+                console.log(`✅ Startup notification sent to admin ${ADMIN_NUMBER}`);
+            } catch (e) {
+                console.error('Startup admin notification failed:', e.message);
+            }
         }
 
         // START KEEP-ALIVE TO PREVENT TIMEOUT
         startKeepAlive(sessionId, wasi_sock);
-                
-                // START KEEP-ALIVE TO PREVENT TIMEOUT
-                startKeepAlive(sessionId, wasi_sock);
-                
+
                 // Send presence available
                 try {
     if (wasi_sock?.authState?.creds?.registered) {
