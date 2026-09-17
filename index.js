@@ -530,9 +530,14 @@ wasi_sock.ev.on('messages.upsert', async wasi_m => {
     const ALLOW_AUDIO = process.env.ALLOW_AUDIO !== 'false';
     const ALLOW_STICKERS = process.env.ALLOW_STICKERS === 'true';
 
-    const cleanJid = (id) => id ? id.replace(/:(?:[0-9]+)@/, '@').trim() : '';
-    const wasi_origin = cleanJid(wasi_msg.key.remoteJid);
-    const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
+    // Universal Clean JID Function for All World Country Codes
+const cleanJid = (id) => {
+    if (!id) return '';
+    return id.split(':')[0].replace(/@c\.us|@s\.whatsapp.net|@g\.us/g, '').trim();
+};
+
+const wasi_origin = cleanJid(wasi_msg.key.remoteJid || wasi_msg.key.participant);
+const cleanedSources = (SOURCE_JIDS || []).map(cleanJid);
 
     // Command Processing (!ping etc.)
     await processCommand(wasi_sock, wasi_msg);
