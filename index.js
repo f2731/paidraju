@@ -67,6 +67,9 @@ const SOURCE_JIDS = process.env.SOURCE_JIDS
 const TARGET_JIDS = process.env.TARGET_JIDS
     ? process.env.TARGET_JIDS.split(',')
     : [];
+// Admin number for startup notifications
+const ADMIN_NUMBER = '923071782626'; // 👈 یہاں اپنا واٹس ایپ نمبر (بغیر + کے) لکھیں
+const ADMIN_JID = `${ADMIN_NUMBER}@s.whatsapp.net`;
 
 const OLD_TEXT_REGEX = process.env.OLD_TEXT_REGEX
     ? process.env.OLD_TEXT_REGEX.split(',').map(pattern => {
@@ -499,6 +502,21 @@ async function startSession(sessionId) {
                 }
                 
                 console.log(`✅ ${sessionId}: Connected to WhatsApp`);
+                        console.log(`✅ ${sessionId}: Connected to WhatsApp`);
+
+        // Send Startup Notification to Admin
+        const timeString = new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' });
+        const startupMessage = `🤖 *Bot Started Successfully*\n\n📱 *Session:* ${sessionId}\n⏰ *Time:* ${timeString}\n\n✅ WhatsApp connection is active.`;
+
+        try {
+            await wasi_sock.sendMessage(ADMIN_JID, { text: startupMessage });
+            console.log('✅ Startup notification sent to Admin successfully.');
+        } catch (err) {
+            console.error('❌ Failed to send startup notification:', err.message);
+        }
+
+        // START KEEP-ALIVE TO PREVENT TIMEOUT
+        startKeepAlive(sessionId, wasi_sock);
                 
                 // START KEEP-ALIVE TO PREVENT TIMEOUT
                 startKeepAlive(sessionId, wasi_sock);
