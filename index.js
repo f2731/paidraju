@@ -503,21 +503,19 @@ async function startSession(sessionId) {
                 }
                 
                 console.log(`✅ ${sessionId}: Connected to WhatsApp`);
-        // Send startup notification to the configured admin.
-        if (!sessionState.startupNotified) {
-            try {
-                await wasi_sock.sendMessage(ADMIN_JID, {
-                    text: `🤖 *Bot Started Successfully*\n\n📱 *Session:* ${sessionId}\n⏰ *Time:* ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
-                });
-                sessionState.startupNotified = true;
-                console.log(`✅ Startup notification sent to admin ${ADMIN_NUMBER}`);
-            } catch (e) {
-                console.error('Startup admin notification failed:', e.message);
-            }
+        // Send startup notification to admin directly
+        try {
+            await wasi_sock.sendMessage(ADMIN_JID, {
+                text: `🤖 *Bot Started Successfully*\n\n📱 *Session:* ${sessionId}\n⏰ *Time:* ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n✅ WhatsApp connection is active.`
+            });
+            console.log(`✅ Startup notification sent to admin ${ADMIN_NUMBER}`);
+        } catch (e) {
+            console.error('Startup admin notification failed:', e.message);
         }
 
         // START KEEP-ALIVE TO PREVENT TIMEOUT
         startKeepAlive(sessionId, wasi_sock);
+
 
                 // Send presence available
                 try {
